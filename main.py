@@ -56,6 +56,7 @@ class OddsCalculator:
         
         results = []
         total_required = 0
+        warning_message = None
         
         for bet in bets_data:
             min_bet = self.calculate_bet_amount(
@@ -65,24 +66,30 @@ class OddsCalculator:
             )
             total_required += min_bet
             
+            # 総掛け金が不足していても、とりあえず最小掛け金で計算
+            actual_bet = min_bet
+            if total_required > self.total_amount:
+                # 不足分を案分して調整（最低100円は確保）
+                actual_bet = max(100, int(self.total_amount / len(bets_data) / 100) * 100)
+            
             results.append({
                 'name': bet['name'],
                 'category': bet['category'],
                 'odds': bet['odds'],
-                'bet_amount': min_bet,
-                'expected_return': min_bet * bet['odds'],
-                'return_rate': (min_bet * bet['odds']) / self.total_amount if self.total_amount > 0 else 0,
+                'bet_amount': actual_bet,
+                'expected_return': actual_bet * bet['odds'],
+                'return_rate': (actual_bet * bet['odds']) / self.total_amount if self.total_amount > 0 else 0,
                 'target_return': bet['target_return'],
-                'meets_target': (min_bet * bet['odds']) >= (self.total_amount * bet['target_return']),
+                'meets_target': (actual_bet * bet['odds']) >= (self.total_amount * bet['target_return']),
                 'min_bet_for_target': self.calculate_minimum_bet_for_target(
                     bet['odds'], 
                     self.total_amount * bet['target_return']
                 )
             })
         
+        # 警告メッセージを設定（エラーとして返さない）
         if total_required > self.total_amount:
-            min_required = len(bets_data) * 100
-            return [], f"総掛け金が不足しています。必要額: {total_required:,}円 (最低: {min_required:,}円)"
+            warning_message = f"⚠️ 目標達成には総掛け金が不足しています。必要額: {total_required:,}円"
         
         if total_required < self.total_amount:
             surplus = self.total_amount - total_required
@@ -105,7 +112,7 @@ class OddsCalculator:
                         self.total_amount * result['target_return']
                     )
         
-        return results, None
+        return results, warning_message
 
 
 def main(page: ft.Page):
@@ -575,10 +582,15 @@ def main(page: ft.Page):
                             content=ft.Column([
                                 ft.Text("掛金", size=10, color="#9ca3af"),
                                 ft.Text(f"{result['bet_amount']:,}円", color=text_color, weight=ft.FontWeight.W_500),
-                                ft.Text(f"最小: {result.get('min_bet_for_target', 0):,}円", size=9, color="#6b7280"),
+                                ft.Text(
+                                    f"必要: {result.get('min_bet_for_target', 0):,}円" if result.get('min_bet_for_target', 0) > result['bet_amount']
+                                    else f"✓ 達成済", 
+                                    size=9, 
+                                    color="#ef4444" if result.get('min_bet_for_target', 0) > result['bet_amount'] else "#10b981"
+                                ),
                             ], spacing=2),
                             padding=8,
-                            bgcolor="#374151",
+                            bgcolor="#374151" if result.get('min_bet_for_target', 0) <= result['bet_amount'] else "#7f1d1d40",
                             border_radius=6,
                             on_click=lambda e, i=idx: adjust_bet_amount(i, -100),
                             tooltip="クリックで-100円",
@@ -627,31 +639,53 @@ def main(page: ft.Page):
         summary_text.value = f"💰 合計掛け金: {total_bet:,}円 / 設定: {calculator.total_amount:,.0f}円"
         summary_text.color = "#10b981" if total_bet <= calculator.total_amount else "#ef4444"
         
-        # 合成オッズを計算
+        # 合成オッズを計算（常に表示）
         if stored_results:
             synthetic_odds = calculator.calculate_synthetic_odds(stored_results)
             if synthetic_odds > 0:
+                # 実際の合成オッズを表示
                 synthetic_odds_text.value = f"📊 合成オッズ: {synthetic_odds:.2f}倍"
                 synthetic_odds_text.color = "#10b981"
             else:
-                synthetic_odds_text.value = "📊 合成オッズ: 計算中..."
-                synthetic_odds_text.color = "#9ca3af"
+                # 計算できない場合
+                synthetic_odds_text.value = "📊 合成オッズ: 計算不可"
+                synthetic_odds_text.color = "#ef4444"
         else:
             synthetic_odds_text.value = ""
         
-        # 各カテゴリの最小掛け金情報
+        # 各カテゴリの最小掛け金情報と達成可能性を判定
         min_bet_info = []
         total_min_required = 0
+        category_achievable = {'本線': False, '抑え': False, '狙い': False}
+        
         for category, min_bets in category_min_bets.items():
             if min_bets:
                 total_min = sum(min_bets)
                 total_min_required += total_min
                 if total_min > 0:
                     min_bet_info.append(f"{category}: {total_min:,}円")
+                    # 現在の掛け金で達成可能か判定
+                    current_category_bet = sum(r['bet_amount'] for r in stored_results if r['category'] == category)
+                    if current_category_bet >= total_min:
+                        category_achievable[category] = True
         
-        if min_bet_info:
-            min_bet_info_text.value = f"💡 目標達成に必要な最小金額 - {' / '.join(min_bet_info)} (合計: {total_min_required:,}円)"
-            min_bet_info_text.color = "#f59e0b"
+        # 目標達成可能性を判定して表示
+        if total_min_required > 0:
+            if total_min_required <= calculator.total_amount:
+                # 理論的に達成可能
+                if total_min_required <= total_bet:
+                    # 現在の配分で達成済み
+                    min_bet_info_text.value = f"✅ 目標達成可能 - 必要最小金額: {' / '.join(min_bet_info)} (合計: {total_min_required:,}円)"
+                    min_bet_info_text.color = "#10b981"
+                else:
+                    # 達成可能だが現在の配分では未達成
+                    min_bet_info_text.value = f"⚠️ 目標達成には調整が必要 - 必要最小金額: {' / '.join(min_bet_info)} (合計: {total_min_required:,}円)"
+                    min_bet_info_text.color = "#f59e0b"
+            else:
+                # 総掛け金が不足で達成不可能
+                shortage = total_min_required - calculator.total_amount
+                min_bet_info_text.value = f"❌ 目標達成不可能 - 必要金額: {total_min_required:,}円 (不足: {shortage:,}円)"
+                min_bet_info_text.color = "#ef4444"
         else:
             min_bet_info_text.value = ""
         
@@ -686,11 +720,12 @@ def main(page: ft.Page):
             collect_bets(suppression_bets, '抑え', float(suppression_return_field.value or 0))
             collect_bets(aim_bets, '狙い', float(aim_return_field.value or 0))
             
-            results, error = calculator.calculate_distribution_strict(bets_data)
+            results, warning = calculator.calculate_distribution_strict(bets_data)
             
-            if error:
+            if not results and warning:
+                # 完全にエラーの場合（賭け対象が設定されていない等）
                 page.snack_bar = ft.SnackBar(
-                    content=ft.Text(f"❌ {error}", color="white"),
+                    content=ft.Text(f"❌ {warning}", color="white"),
                     bgcolor="#ef4444"
                 )
                 page.snack_bar.open = True
@@ -701,10 +736,17 @@ def main(page: ft.Page):
             stored_results.extend(results)
             display_results()
             
-            page.snack_bar = ft.SnackBar(
-                content=ft.Text("✅ 計算が完了しました！", color="white"),
-                bgcolor="#10b981"
-            )
+            # 警告がある場合は警告を表示、ない場合は成功メッセージ
+            if warning:
+                page.snack_bar = ft.SnackBar(
+                    content=ft.Text(warning, color="white"),
+                    bgcolor="#f59e0b"
+                )
+            else:
+                page.snack_bar = ft.SnackBar(
+                    content=ft.Text("✅ 計算が完了しました！", color="white"),
+                    bgcolor="#10b981"
+                )
             page.snack_bar.open = True
             page.update()
             
