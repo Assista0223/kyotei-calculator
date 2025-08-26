@@ -19,17 +19,29 @@ class OddsCalculator:
         return bet_amount
     
     def calculate_synthetic_odds(self, bets_data: List[Dict]) -> float:
-        """合成オッズを計算"""
+        """合成オッズを計算（掛け金の比率を考慮した加重平均）"""
         if not bets_data:
             return 0
         
-        total_probability = 0
-        for bet in bets_data:
-            if bet.get('bet_amount', 0) > 0 and bet.get('odds', 0) > 0:
-                total_probability += bet['bet_amount'] / (bet['bet_amount'] * bet['odds'])
+        total_bet = sum(bet.get('bet_amount', 0) for bet in bets_data)
+        if total_bet == 0:
+            return 0
         
-        if total_probability > 0:
-            return 1 / total_probability
+        # 各舟券の確率を掛け金の比率で重み付け
+        weighted_probability = 0
+        for bet in bets_data:
+            bet_amount = bet.get('bet_amount', 0)
+            odds = bet.get('odds', 0)
+            if bet_amount > 0 and odds > 0:
+                # この舟券の掛け金比率
+                weight = bet_amount / total_bet
+                # 1/オッズが的中確率の推定値
+                probability = 1 / odds
+                weighted_probability += weight * probability
+        
+        if weighted_probability > 0:
+            # 合成オッズ = 1 / 加重平均確率
+            return 1 / weighted_probability
         return 0
     
     def calculate_minimum_bet_for_target(self, odds: float, target_return: float) -> int:
@@ -419,10 +431,12 @@ def main(page: ft.Page):
     
     def copy_results(e):
         if not stored_results:
-            page.show_snack_bar(ft.SnackBar(
+            page.snack_bar = ft.SnackBar(
                 content=ft.Text("コピーする結果がありません", color="white"),
                 bgcolor="#ef4444"
-            ))
+            )
+            page.snack_bar.open = True
+            page.update()
             return
         
         copy_text = "🏁 KYOTEI FUND CALCULATOR RESULTS\n"
@@ -444,16 +458,20 @@ def main(page: ft.Page):
         
         try:
             pyperclip.copy(copy_text)
-            page.show_snack_bar(ft.SnackBar(
+            page.snack_bar = ft.SnackBar(
                 content=ft.Text("📋 結果をクリップボードにコピーしました！", color="white"),
                 bgcolor="#10b981"
-            ))
+            )
+            page.snack_bar.open = True
+            page.update()
         except:
             page.clipboard.set_data(ft.ClipboardData(copy_text))
-            page.show_snack_bar(ft.SnackBar(
+            page.snack_bar = ft.SnackBar(
                 content=ft.Text("📋 結果をクリップボードにコピーしました！", color="white"),
                 bgcolor="#10b981"
-            ))
+            )
+            page.snack_bar.open = True
+            page.update()
     
     def reset_all(e):
         total_amount_field.value = "10000"
@@ -474,6 +492,8 @@ def main(page: ft.Page):
         stored_results.clear()
         summary_text.value = "計算結果待ち..."
         summary_text.color = "#9ca3af"
+        synthetic_odds_text.value = ""
+        min_bet_info_text.value = ""
         update_section_multipliers()
         page.update()
     
@@ -608,19 +628,30 @@ def main(page: ft.Page):
         summary_text.color = "#10b981" if total_bet <= calculator.total_amount else "#ef4444"
         
         # 合成オッズを計算
-        synthetic_odds = calculator.calculate_synthetic_odds(stored_results)
-        synthetic_odds_text.value = f"📊 合成オッズ: {synthetic_odds:.2f}倍" if synthetic_odds > 0 else ""
+        if stored_results:
+            synthetic_odds = calculator.calculate_synthetic_odds(stored_results)
+            if synthetic_odds > 0:
+                synthetic_odds_text.value = f"📊 合成オッズ: {synthetic_odds:.2f}倍"
+                synthetic_odds_text.color = "#10b981"
+            else:
+                synthetic_odds_text.value = "📊 合成オッズ: 計算中..."
+                synthetic_odds_text.color = "#9ca3af"
+        else:
+            synthetic_odds_text.value = ""
         
         # 各カテゴリの最小掛け金情報
         min_bet_info = []
+        total_min_required = 0
         for category, min_bets in category_min_bets.items():
             if min_bets:
                 total_min = sum(min_bets)
+                total_min_required += total_min
                 if total_min > 0:
                     min_bet_info.append(f"{category}: {total_min:,}円")
         
         if min_bet_info:
-            min_bet_info_text.value = f"💡 目標倍率達成に必要な最小掛け金 - {' / '.join(min_bet_info)}"
+            min_bet_info_text.value = f"💡 目標達成に必要な最小金額 - {' / '.join(min_bet_info)} (合計: {total_min_required:,}円)"
+            min_bet_info_text.color = "#f59e0b"
         else:
             min_bet_info_text.value = ""
         
@@ -658,26 +689,32 @@ def main(page: ft.Page):
             results, error = calculator.calculate_distribution_strict(bets_data)
             
             if error:
-                page.show_snack_bar(ft.SnackBar(
+                page.snack_bar = ft.SnackBar(
                     content=ft.Text(f"❌ {error}", color="white"),
                     bgcolor="#ef4444"
-                ))
+                )
+                page.snack_bar.open = True
+                page.update()
                 return
             
             stored_results.clear()
             stored_results.extend(results)
             display_results()
             
-            page.show_snack_bar(ft.SnackBar(
+            page.snack_bar = ft.SnackBar(
                 content=ft.Text("✅ 計算が完了しました！", color="white"),
                 bgcolor="#10b981"
-            ))
+            )
+            page.snack_bar.open = True
+            page.update()
             
         except Exception as ex:
-            page.show_snack_bar(ft.SnackBar(
+            page.snack_bar = ft.SnackBar(
                 content=ft.Text(f"❌ エラー: {str(ex)}", color="white"),
                 bgcolor="#ef4444"
-            ))
+            )
+            page.snack_bar.open = True
+            page.update()
     
     # ボタンエリア
     buttons_container = ft.Container(
