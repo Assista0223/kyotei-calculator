@@ -15,8 +15,8 @@ class OddsCalculator:
         if odds <= 0 or target_return_rate <= 0:
             return 0
         required_return = total_amount * target_return_rate
-        bet_amount = math.ceil(required_return / odds / 100) * 100
-        return bet_amount
+        bet_amount = required_return / odds  # 必要な掛け金を計算
+        return math.ceil(bet_amount / 100) * 100  # 100円単位に切り上げ
     
     def calculate_synthetic_odds(self, bets_data: List[Dict]) -> float:
         """合成オッズを計算（掛け金の比率を考慮した加重平均）"""
@@ -48,7 +48,8 @@ class OddsCalculator:
         """目標払戻金額に到達するための最小掛け金を計算"""
         if odds <= 0:
             return 0
-        return math.ceil(target_return / odds / 100) * 100
+        bet_amount = target_return / odds  # 必要な掛け金を計算
+        return math.ceil(bet_amount / 100) * 100  # 100円単位に切り上げ
     
     def calculate_distribution_strict(self, bets_data: List[Dict]) -> Tuple[List[Dict], str]:
         if not bets_data:
