@@ -44,6 +44,12 @@ class OddsCalculator:
             return 1 / weighted_probability
         return 0
     
+    def is_target_achievable(self, odds: float, target_return_rate: float) -> bool:
+        """オッズで目標倍率が理論的に達成可能かを判定"""
+        if odds <= 0 or target_return_rate <= 0:
+            return False
+        return odds >= target_return_rate
+    
     def calculate_minimum_bet_for_target(self, odds: float, target_return: float) -> int:
         """目標払戻金額に到達するための最小掛け金を計算"""
         if odds <= 0:
@@ -73,6 +79,9 @@ class OddsCalculator:
                 # 不足分を案分して調整（最低100円は確保）
                 actual_bet = max(100, int(self.total_amount / len(bets_data) / 100) * 100)
             
+            # 目標達成可能性を判定
+            is_achievable = self.is_target_achievable(bet['odds'], bet['target_return'])
+            
             results.append({
                 'name': bet['name'],
                 'category': bet['category'],
@@ -82,10 +91,11 @@ class OddsCalculator:
                 'return_rate': (actual_bet * bet['odds']) / self.total_amount if self.total_amount > 0 else 0,
                 'target_return': bet['target_return'],
                 'meets_target': (actual_bet * bet['odds']) >= (self.total_amount * bet['target_return']),
+                'is_theoretically_achievable': is_achievable,
                 'min_bet_for_target': self.calculate_minimum_bet_for_target(
                     bet['odds'], 
                     self.total_amount * bet['target_return']
-                )
+                ) if is_achievable else 0
             })
         
         # 警告メッセージを設定（エラーとして返さない）
@@ -108,10 +118,13 @@ class OddsCalculator:
                     result['expected_return'] = result['bet_amount'] * result['odds']
                     result['return_rate'] = result['expected_return'] / self.total_amount if self.total_amount > 0 else 0
                     result['meets_target'] = result['return_rate'] >= result['target_return']
+                    # 理論的に達成可能な場合のみ最小掛け金を計算
+                    is_achievable = self.is_target_achievable(result['odds'], result['target_return'])
+                    result['is_theoretically_achievable'] = is_achievable
                     result['min_bet_for_target'] = self.calculate_minimum_bet_for_target(
                         result['odds'],
                         self.total_amount * result['target_return']
-                    )
+                    ) if is_achievable else 0
         
         return results, warning_message
 
@@ -426,6 +439,26 @@ def main(page: ft.Page):
     synthetic_odds_text = ft.Text("", size=14, color="#9ca3af")
     min_bet_info_text = ft.Text("", size=12, color="#9ca3af")
     
+    def get_achievement_status_text(result):
+        """達成状況のテキストを取得"""
+        if not result.get('is_theoretically_achievable', True):
+            return f"❌ 達成不可能 (オッズ{result['odds']:.1f} < 目標{result['target_return']:.1f})"
+        elif result.get('min_bet_for_target', 0) == 0:
+            return "✓ 達成済"
+        elif result.get('min_bet_for_target', 0) > result['bet_amount']:
+            return f"必要: {result.get('min_bet_for_target', 0):,}円"
+        else:
+            return "✓ 達成済"
+    
+    def get_achievement_status_color(result):
+        """達成状況の色を取得"""
+        if not result.get('is_theoretically_achievable', True):
+            return "#ef4444"  # 赤（達成不可能）
+        elif result.get('min_bet_for_target', 0) > result['bet_amount']:
+            return "#f59e0b"  # オレンジ（調整必要）
+        else:
+            return "#10b981"  # 緑（達成済み）
+    
     def update_section_multipliers():
         # 各セクションの倍率表示を更新
         main_section.content.controls[0].controls[1].value = f"倍率: {main_return_field.value}"
@@ -530,10 +563,13 @@ def main(page: ft.Page):
             result['expected_return'] = new_bet * result['odds']
             result['return_rate'] = result['expected_return'] / calculator.total_amount
             result['meets_target'] = result['return_rate'] >= result['target_return']
+            # 理論的に達成可能な場合のみ最小掛け金を計算
+            is_achievable = calculator.is_target_achievable(result['odds'], result['target_return'])
+            result['is_theoretically_achievable'] = is_achievable
             result['min_bet_for_target'] = calculator.calculate_minimum_bet_for_target(
                 result['odds'],
                 calculator.total_amount * result['target_return']
-            )
+            ) if is_achievable else 0
             
             display_results()
     
@@ -584,14 +620,13 @@ def main(page: ft.Page):
                                 ft.Text("掛金", size=10, color="#9ca3af"),
                                 ft.Text(f"{result['bet_amount']:,}円", color=text_color, weight=ft.FontWeight.W_500),
                                 ft.Text(
-                                    f"必要: {result.get('min_bet_for_target', 0):,}円" if result.get('min_bet_for_target', 0) > result['bet_amount']
-                                    else f"✓ 達成済", 
+                                    self.get_achievement_status_text(result), 
                                     size=9, 
-                                    color="#ef4444" if result.get('min_bet_for_target', 0) > result['bet_amount'] else "#10b981"
+                                    color=self.get_achievement_status_color(result)
                                 ),
                             ], spacing=2),
                             padding=8,
-                            bgcolor="#374151" if result.get('min_bet_for_target', 0) <= result['bet_amount'] else "#7f1d1d40",
+                            bgcolor="#374151" if result.get('is_theoretically_achievable', True) and result.get('min_bet_for_target', 0) <= result['bet_amount'] else "#7f1d1d40",
                             border_radius=6,
                             on_click=lambda e, i=idx: adjust_bet_amount(i, -100),
                             tooltip="クリックで-100円",
@@ -659,6 +694,10 @@ def main(page: ft.Page):
         total_min_required = 0
         category_achievable = {'本線': False, '抑え': False, '狙い': False}
         
+        # 理論的に達成可能なもののみを集計
+        achievable_results = [r for r in stored_results if r.get('is_theoretically_achievable', True)]
+        unachievable_results = [r for r in stored_results if not r.get('is_theoretically_achievable', True)]
+        
         for category, min_bets in category_min_bets.items():
             if min_bets:
                 total_min = sum(min_bets)
@@ -666,12 +705,17 @@ def main(page: ft.Page):
                 if total_min > 0:
                     min_bet_info.append(f"{category}: {total_min:,}円")
                     # 現在の掛け金で達成可能か判定
-                    current_category_bet = sum(r['bet_amount'] for r in stored_results if r['category'] == category)
+                    current_category_bet = sum(r['bet_amount'] for r in achievable_results if r['category'] == category)
                     if current_category_bet >= total_min:
                         category_achievable[category] = True
         
         # 目標達成可能性を判定して表示
-        if total_min_required > 0:
+        if unachievable_results:
+            # オッズが低すぎて達成不可能な舟券がある場合
+            unachievable_names = [f"{r['category']}:{r['name']}(オッズ{r['odds']:.1f}倍)" for r in unachievable_results]
+            min_bet_info_text.value = f"❌ 物理的に達成不可能な舟券があります - {' / '.join(unachievable_names)}"
+            min_bet_info_text.color = "#ef4444"
+        elif total_min_required > 0:
             if total_min_required <= calculator.total_amount:
                 # 理論的に達成可能
                 if total_min_required <= total_bet:
