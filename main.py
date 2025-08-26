@@ -18,6 +18,26 @@ class OddsCalculator:
         bet_amount = math.ceil(required_return / odds / 100) * 100
         return bet_amount
     
+    def calculate_synthetic_odds(self, bets_data: List[Dict]) -> float:
+        """合成オッズを計算"""
+        if not bets_data:
+            return 0
+        
+        total_probability = 0
+        for bet in bets_data:
+            if bet.get('bet_amount', 0) > 0 and bet.get('odds', 0) > 0:
+                total_probability += bet['bet_amount'] / (bet['bet_amount'] * bet['odds'])
+        
+        if total_probability > 0:
+            return 1 / total_probability
+        return 0
+    
+    def calculate_minimum_bet_for_target(self, odds: float, target_return: float) -> int:
+        """目標払戻金額に到達するための最小掛け金を計算"""
+        if odds <= 0:
+            return 0
+        return math.ceil(target_return / odds / 100) * 100
+    
     def calculate_distribution_strict(self, bets_data: List[Dict]) -> Tuple[List[Dict], str]:
         if not bets_data:
             return [], "賭け対象が設定されていません"
@@ -41,7 +61,11 @@ class OddsCalculator:
                 'expected_return': min_bet * bet['odds'],
                 'return_rate': (min_bet * bet['odds']) / self.total_amount if self.total_amount > 0 else 0,
                 'target_return': bet['target_return'],
-                'meets_target': (min_bet * bet['odds']) >= (self.total_amount * bet['target_return'])
+                'meets_target': (min_bet * bet['odds']) >= (self.total_amount * bet['target_return']),
+                'min_bet_for_target': self.calculate_minimum_bet_for_target(
+                    bet['odds'], 
+                    self.total_amount * bet['target_return']
+                )
             })
         
         if total_required > self.total_amount:
@@ -64,6 +88,10 @@ class OddsCalculator:
                     result['expected_return'] = result['bet_amount'] * result['odds']
                     result['return_rate'] = result['expected_return'] / self.total_amount if self.total_amount > 0 else 0
                     result['meets_target'] = result['return_rate'] >= result['target_return']
+                    result['min_bet_for_target'] = self.calculate_minimum_bet_for_target(
+                        result['odds'],
+                        self.total_amount * result['target_return']
+                    )
         
         return results, None
 
@@ -375,6 +403,8 @@ def main(page: ft.Page):
     # 結果表示
     results_container = ft.Column(scroll=ft.ScrollMode.AUTO)
     summary_text = ft.Text("計算結果待ち...", size=16, weight=ft.FontWeight.W_600, color="#9ca3af")
+    synthetic_odds_text = ft.Text("", size=14, color="#9ca3af")
+    min_bet_info_text = ft.Text("", size=12, color="#9ca3af")
     
     def update_section_multipliers():
         # 各セクションの倍率表示を更新
@@ -472,15 +502,22 @@ def main(page: ft.Page):
             result['expected_return'] = new_bet * result['odds']
             result['return_rate'] = result['expected_return'] / calculator.total_amount
             result['meets_target'] = result['return_rate'] >= result['target_return']
+            result['min_bet_for_target'] = calculator.calculate_minimum_bet_for_target(
+                result['odds'],
+                calculator.total_amount * result['target_return']
+            )
             
             display_results()
     
     def display_results():
         results_container.controls.clear()
         total_bet = 0
+        category_min_bets = {'本線': [], '抑え': [], '狙い': []}
         
         for idx, result in enumerate(stored_results):
             total_bet += result['bet_amount']
+            if result['category'] in category_min_bets:
+                category_min_bets[result['category']].append(result.get('min_bet_for_target', 0))
             
             # カテゴリー別の色設定
             category_colors = {
@@ -518,6 +555,7 @@ def main(page: ft.Page):
                             content=ft.Column([
                                 ft.Text("掛金", size=10, color="#9ca3af"),
                                 ft.Text(f"{result['bet_amount']:,}円", color=text_color, weight=ft.FontWeight.W_500),
+                                ft.Text(f"最小: {result.get('min_bet_for_target', 0):,}円", size=9, color="#6b7280"),
                             ], spacing=2),
                             padding=8,
                             bgcolor="#374151",
@@ -568,6 +606,24 @@ def main(page: ft.Page):
         
         summary_text.value = f"💰 合計掛け金: {total_bet:,}円 / 設定: {calculator.total_amount:,.0f}円"
         summary_text.color = "#10b981" if total_bet <= calculator.total_amount else "#ef4444"
+        
+        # 合成オッズを計算
+        synthetic_odds = calculator.calculate_synthetic_odds(stored_results)
+        synthetic_odds_text.value = f"📊 合成オッズ: {synthetic_odds:.2f}倍" if synthetic_odds > 0 else ""
+        
+        # 各カテゴリの最小掛け金情報
+        min_bet_info = []
+        for category, min_bets in category_min_bets.items():
+            if min_bets:
+                total_min = sum(min_bets)
+                if total_min > 0:
+                    min_bet_info.append(f"{category}: {total_min:,}円")
+        
+        if min_bet_info:
+            min_bet_info_text.value = f"💡 目標倍率達成に必要な最小掛け金 - {' / '.join(min_bet_info)}"
+        else:
+            min_bet_info_text.value = ""
+        
         page.update()
     
     def calculate_distribution(e):
@@ -651,6 +707,8 @@ def main(page: ft.Page):
             ], spacing=8),
             ft.Container(height=8),
             summary_text,
+            synthetic_odds_text,
+            min_bet_info_text,
             ft.Container(height=8),
             results_container,
         ])
