@@ -2,6 +2,13 @@ import flet as ft
 from typing import List, Dict, Tuple
 import math
 import pyperclip
+from datetime import datetime
+try:
+    from odds_scraper import BoatRaceOddsScraper
+    ODDS_SCRAPER_AVAILABLE = True
+except ImportError:
+    ODDS_SCRAPER_AVAILABLE = False
+    print("警告: odds_scraper モジュールが見つかりません。オッズ自動取得機能は使用できません。")
 
 
 class OddsCalculator:
@@ -346,6 +353,11 @@ def main(page: ft.Page):
     suppression_return_field = create_input_field("抑え倍率", "1.2", ft.KeyboardType.NUMBER)
     aim_return_field = create_input_field("狙い倍率", "2.0", ft.KeyboardType.NUMBER)
     
+    # 各カテゴリの入力エリア（オッズ取得機能で使用するため先に定義）
+    main_bets = ft.Column(scroll=ft.ScrollMode.AUTO)
+    suppression_bets = ft.Column(scroll=ft.ScrollMode.AUTO)
+    aim_bets = ft.Column(scroll=ft.ScrollMode.AUTO)
+    
     settings_card = create_glass_card(
         ft.Column([
             ft.Row([
@@ -362,10 +374,135 @@ def main(page: ft.Page):
         ])
     )
     
-    # 各カテゴリの入力エリア
-    main_bets = ft.Column(scroll=ft.ScrollMode.AUTO)
-    suppression_bets = ft.Column(scroll=ft.ScrollMode.AUTO)
-    aim_bets = ft.Column(scroll=ft.ScrollMode.AUTO)
+    # オッズ自動取得機能
+    if ODDS_SCRAPER_AVAILABLE:
+        odds_scraper = BoatRaceOddsScraper()
+        
+        # 競艇場選択ドロップダウン
+        stadium_dropdown = ft.Dropdown(
+            label="競艇場",
+            options=[ft.dropdown.Option(name) for name in odds_scraper.STADIUMS.keys()],
+            width=200,
+            filled=True,
+            bgcolor="#2a2a2a",
+            border_color="#374151",
+            focused_border_color="#6366f1",
+            label_style=ft.TextStyle(color="#9ca3af"),
+            text_style=ft.TextStyle(color="#f8fafc"),
+        )
+        
+        # レース番号選択
+        race_no_dropdown = ft.Dropdown(
+            label="レース番号",
+            options=[ft.dropdown.Option(str(i)) for i in range(1, 13)],
+            width=150,
+            filled=True,
+            bgcolor="#2a2a2a",
+            border_color="#374151",
+            focused_border_color="#6366f1",
+            label_style=ft.TextStyle(color="#9ca3af"),
+            text_style=ft.TextStyle(color="#f8fafc"),
+        )
+        
+        # 日付入力（オプション）
+        date_field = create_input_field("日付 (YYYYMMDD)", datetime.now().strftime("%Y%m%d"), ft.KeyboardType.NUMBER, expand=False)
+        date_field.width = 200
+        
+        # 取得状態テキスト
+        fetch_status_text = ft.Text("", size=12, color="#9ca3af")
+        
+        def fetch_odds(e):
+            """オッズを取得して入力欄に自動設定"""
+            if not stadium_dropdown.value or not race_no_dropdown.value:
+                fetch_status_text.value = "❌ 競艇場とレース番号を選択してください"
+                fetch_status_text.color = "#ef4444"
+                page.update()
+                return
+            
+            fetch_status_text.value = "⏳ オッズ取得中..."
+            fetch_status_text.color = "#f59e0b"
+            page.update()
+            
+            try:
+                stadium_code = odds_scraper.get_stadium_code(stadium_dropdown.value)
+                race_no = int(race_no_dropdown.value)
+                date = date_field.value if date_field.value else None
+                
+                # 2連単オッズを取得
+                odds_data = odds_scraper.fetch_odds_2tan(stadium_code, race_no, date)
+                
+                if odds_data:
+                    # 取得したオッズを入力欄に自動設定
+                    # 本線、抑え、狙いの各エリアに配分
+                    odds_list = sorted(odds_data.items(), key=lambda x: x[1])  # オッズの低い順
+                    
+                    # 既存の入力をクリア
+                    for container in [main_bets, suppression_bets, aim_bets]:
+                        for bet_row in container.controls[:]:
+                            container.controls.remove(bet_row)
+                    
+                    # 低オッズを本線に（上位3つ）
+                    for i, (ticket, odds) in enumerate(odds_list[:3]):
+                        if i < 3:
+                            add_bet_row("main", main_bets)
+                            if main_bets.controls:
+                                row = main_bets.controls[-1].content
+                                row.controls[0].controls[0].value = ticket
+                                row.controls[1].controls[0].value = str(odds)
+                    
+                    # 中オッズを抑えに（4-6位）
+                    for i, (ticket, odds) in enumerate(odds_list[3:6]):
+                        add_bet_row("suppression", suppression_bets)
+                        if suppression_bets.controls:
+                            row = suppression_bets.controls[-1].content
+                            row.controls[0].controls[0].value = ticket
+                            row.controls[1].controls[0].value = str(odds)
+                    
+                    # 高オッズを狙いに（7-9位）
+                    for i, (ticket, odds) in enumerate(odds_list[6:9]):
+                        add_bet_row("aim", aim_bets)
+                        if aim_bets.controls:
+                            row = aim_bets.controls[-1].content
+                            row.controls[0].controls[0].value = ticket
+                            row.controls[1].controls[0].value = str(odds)
+                    
+                    fetch_status_text.value = f"✅ {len(odds_data)}件のオッズを取得しました"
+                    fetch_status_text.color = "#10b981"
+                else:
+                    fetch_status_text.value = "❌ オッズの取得に失敗しました"
+                    fetch_status_text.color = "#ef4444"
+                    
+            except Exception as ex:
+                fetch_status_text.value = f"❌ エラー: {str(ex)}"
+                fetch_status_text.color = "#ef4444"
+            
+            page.update()
+        
+        # オッズ取得ボタン
+        fetch_odds_button = create_modern_button(
+            "オッズ取得", 
+            fetch_odds,
+            GRADIENT_SUCCESS,
+            "download",
+            False
+        )
+        
+        odds_fetch_card = create_glass_card(
+            ft.Column([
+                ft.Row([
+                    ft.Icon("cloud_download", color="#10b981", size=20),
+                    ft.Text("オッズ自動取得", size=18, weight=ft.FontWeight.W_600, color="#f8fafc"),
+                ], spacing=8),
+                ft.Container(height=12),
+                ft.Row([
+                    stadium_dropdown,
+                    race_no_dropdown,
+                    date_field,
+                    fetch_odds_button,
+                ], spacing=10, wrap=True),
+                fetch_status_text,
+            ])
+        )
     
     def add_bet_row(category: str, container: ft.Column):
         bet_row = ft.Container(
@@ -839,17 +976,26 @@ def main(page: ft.Page):
     )
     
     # メインレイアウト
-    main_content = ft.Column([
+    layout_items = [
         real_admob_banner,  # 上部に本物のAdMob広告
         header,
         settings_card,
+    ]
+    
+    # オッズ取得カードが有効な場合は追加
+    if ODDS_SCRAPER_AVAILABLE:
+        layout_items.append(odds_fetch_card)
+    
+    layout_items.extend([
         main_section,
         suppression_section,
         aim_section,
         buttons_container,
         results_card,
         ft.Container(height=20),  # 下部余白
-    ], scroll=ft.ScrollMode.AUTO, spacing=0)
+    ])
+    
+    main_content = ft.Column(layout_items, scroll=ft.ScrollMode.AUTO, spacing=0)
     
     page.add(main_content)
     
