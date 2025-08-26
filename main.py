@@ -404,9 +404,13 @@ def main(page: ft.Page):
             text_style=ft.TextStyle(color="#f8fafc"),
         )
         
-        # 日付入力（オプション）
-        date_field = create_input_field("日付 (YYYYMMDD)", datetime.now().strftime("%Y%m%d"), ft.KeyboardType.NUMBER, expand=False)
-        date_field.width = 200
+        # デバッグモードチェックボックス
+        debug_checkbox = ft.Checkbox(
+            label="デバッグモード",
+            value=False,
+            fill_color="#6366f1",
+            label_style=ft.TextStyle(color="#9ca3af", size=12),
+        )
         
         # 取得状態テキスト
         fetch_status_text = ft.Text("", size=12, color="#9ca3af")
@@ -426,10 +430,10 @@ def main(page: ft.Page):
             try:
                 stadium_code = odds_scraper.get_stadium_code(stadium_dropdown.value)
                 race_no = int(race_no_dropdown.value)
-                date = date_field.value if date_field.value else None
+                debug = debug_checkbox.value
                 
-                # 2連単オッズを取得
-                odds_data = odds_scraper.fetch_odds_2tan(stadium_code, race_no, date)
+                # 2連単オッズを取得（当日のみ）
+                odds_data = odds_scraper.fetch_odds_2tan(stadium_code, race_no, debug=debug)
                 
                 if odds_data:
                     # 取得したオッズを入力欄に自動設定
@@ -497,9 +501,10 @@ def main(page: ft.Page):
                 ft.Row([
                     stadium_dropdown,
                     race_no_dropdown,
-                    date_field,
                     fetch_odds_button,
+                    debug_checkbox,
                 ], spacing=10, wrap=True),
+                ft.Text("※ オッズは当日のレースのみ取得可能です", size=10, color="#6b7280"),
                 fetch_status_text,
             ])
         )

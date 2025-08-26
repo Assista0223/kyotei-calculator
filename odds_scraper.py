@@ -43,13 +43,14 @@ class BoatRaceOddsScraper:
         """競艇場名からコードを取得"""
         return self.STADIUMS.get(stadium_name)
     
-    def fetch_odds_2tan(self, stadium_code: str, race_no: int, date: str = None) -> Dict[str, float]:
+    def fetch_odds_2tan(self, stadium_code: str, race_no: int, date: str = None, debug: bool = False) -> Dict[str, float]:
         """2連単オッズを取得
         
         Args:
             stadium_code: 競艇場コード（01-24）
             race_no: レース番号（1-12）
             date: 日付（YYYYMMDD形式）、Noneの場合は当日
+            debug: デバッグ情報を出力するか
         
         Returns:
             Dict[舟券番号, オッズ] 例: {"1-2": 5.4, "1-3": 12.3, ...}
@@ -68,41 +69,108 @@ class BoatRaceOddsScraper:
             'hd': date
         }
         
+        if debug:
+            print(f"URL: {url}")
+            print(f"Params: {params}")
+        
         try:
             response = self.session.get(url, params=params, timeout=10)
             response.raise_for_status()
             
+            if debug:
+                print(f"Status Code: {response.status_code}")
+                print(f"Content Length: {len(response.content)}")
+            
             soup = BeautifulSoup(response.content, 'html.parser')
             odds_data = {}
             
-            # オッズテーブルを解析（実際のHTML構造に合わせて調整が必要）
-            odds_tables = soup.find_all('table', class_='oddsTable')
-            for table in odds_tables:
-                rows = table.find_all('tr')
-                for row in rows:
-                    cells = row.find_all('td')
-                    if len(cells) >= 2:
-                        # 舟券番号とオッズを抽出
-                        ticket_text = cells[0].get_text(strip=True)
-                        odds_text = cells[1].get_text(strip=True)
-                        
-                        # 舟券番号を整形（例: "1-2"）
-                        ticket_match = re.match(r'(\d)-(\d)', ticket_text)
-                        if ticket_match:
-                            ticket = f"{ticket_match.group(1)}-{ticket_match.group(2)}"
-                            try:
-                                odds = float(odds_text)
-                                odds_data[ticket] = odds
-                            except ValueError:
-                                continue
+            # 方法1: oddsListクラスを持つテーブルを探す
+            odds_list = soup.find_all('tbody', class_='oddslist')
+            if odds_list:
+                for tbody in odds_list:
+                    rows = tbody.find_all('tr')
+                    for row in rows:
+                        cells = row.find_all(['td', 'th'])
+                        for i in range(0, len(cells), 2):
+                            if i + 1 < len(cells):
+                                ticket_cell = cells[i]
+                                odds_cell = cells[i + 1]
+                                
+                                # 舟券番号を抽出
+                                ticket_text = ticket_cell.get_text(strip=True).replace(' ', '').replace('　', '')
+                                odds_text = odds_cell.get_text(strip=True)
+                                
+                                # 1-2形式に整形
+                                match = re.match(r'(\d).*?(\d)', ticket_text)
+                                if match and odds_text and odds_text != '-' and odds_text != '---':
+                                    ticket = f"{match.group(1)}-{match.group(2)}"
+                                    try:
+                                        odds = float(odds_text.replace(',', ''))
+                                        odds_data[ticket] = odds
+                                    except ValueError:
+                                        continue
+            
+            # 方法2: is-fs14クラスでオッズを探す（別のパターン）
+            if not odds_data:
+                odds_cells = soup.find_all('td', class_='is-fs14')
+                for i, cell in enumerate(odds_cells):
+                    odds_text = cell.get_text(strip=True)
+                    if odds_text and odds_text != '-' and odds_text != '---':
+                        # 対応する舟券番号を探す
+                        parent = cell.parent
+                        if parent:
+                            prev_cells = parent.find_all('td')
+                            for j, prev_cell in enumerate(prev_cells):
+                                if prev_cell == cell and j > 0:
+                                    ticket_text = prev_cells[j-1].get_text(strip=True)
+                                    match = re.match(r'(\d).*?(\d)', ticket_text)
+                                    if match:
+                                        ticket = f"{match.group(1)}-{match.group(2)}"
+                                        try:
+                                            odds = float(odds_text.replace(',', ''))
+                                            odds_data[ticket] = odds
+                                        except ValueError:
+                                            continue
+            
+            # 方法3: 一般的なテーブル構造を試す
+            if not odds_data:
+                tables = soup.find_all('table')
+                for table in tables:
+                    rows = table.find_all('tr')
+                    for row in rows:
+                        cells = row.find_all('td')
+                        # 2列ずつ処理（舟券番号、オッズの組み合わせ）
+                        for i in range(0, len(cells), 2):
+                            if i + 1 < len(cells):
+                                ticket_text = cells[i].get_text(strip=True)
+                                odds_text = cells[i+1].get_text(strip=True)
+                                
+                                # 数字-数字のパターンを探す
+                                if re.search(r'\d.*\d', ticket_text) and re.search(r'\d+\.?\d*', odds_text):
+                                    match = re.match(r'(\d).*?(\d)', ticket_text)
+                                    if match:
+                                        ticket = f"{match.group(1)}-{match.group(2)}"
+                                        try:
+                                            odds = float(odds_text.replace(',', ''))
+                                            odds_data[ticket] = odds
+                                        except ValueError:
+                                            continue
+            
+            if debug:
+                print(f"Found {len(odds_data)} odds")
+                if odds_data:
+                    print(f"Sample: {list(odds_data.items())[:5]}")
             
             return odds_data
             
         except requests.RequestException as e:
-            print(f"オッズ取得エラー: {e}")
+            print(f"ネットワークエラー: {e}")
             return {}
         except Exception as e:
             print(f"解析エラー: {e}")
+            import traceback
+            if debug:
+                traceback.print_exc()
             return {}
     
     def fetch_odds_3tan(self, stadium_code: str, race_no: int, date: str = None) -> Dict[str, float]:
